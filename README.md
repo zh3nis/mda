@@ -1,1 +1,1 @@
-# mda
+# Deep Mixture Discriminant Analysis
