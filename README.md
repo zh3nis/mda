@@ -9,4 +9,4 @@ pip install -e .
 ```
 
 ## Usage
-An example is given in the `deep_mda_mnist.py` file.
+An example is given in the `MNIST.ipynb` notebook.
