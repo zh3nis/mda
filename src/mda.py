@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class MDAHead(nn.Module):
-    def __init__(self, d: int, num_classes: int, K: int = 2, init_scale: float = .1):
+    def __init__(self, d: int, num_classes: int, K: int = 2, init_scale: float = 1.0):
         super().__init__()
         self.C, self.K, self.D = num_classes, K, d
         self.mu        = nn.Parameter(torch.randn(self.C, self.K, self.D) * init_scale)
@@ -38,55 +38,3 @@ class MDAHead(nn.Module):
         logpi  = F.log_softmax(self.logits_pi, dim=-1)    # [C, K]
         log_pz_c = torch.logsumexp(logpdf + logpi.unsqueeze(0), dim=-1)  # [B,C]
         return self.logits_prior.unsqueeze(0) + log_pz_c
-
-    # ----- supervised responsibilities over components of the TRUE class -----
-    @torch.no_grad()
-    def _resp_true_class(self, z: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        logpdf = self._component_logpdf(z)                # [B, C, K]
-        logpi  = F.log_softmax(self.logits_pi, dim=-1)    # [C, K]
-        log_r  = logpdf + logpi.unsqueeze(0)              # [B, C, K]
-        return F.softmax(log_r[torch.arange(z.size(0)), y], dim=-1)  # [B, K]
-
-    # ----- EM step (one full pass over loader) -----
-    @torch.no_grad()
-    def em_update(self, encode, loader, device, var_floor: float = 1e-3, jitter: float = 1e-6, momentum: float = 0.2):
-        C, K, D = self.C, self.K, self.D
-        Nk  = torch.zeros(C, K, device=device)
-        S1  = torch.zeros(C, K, D, device=device)
-        S2  = torch.zeros(C, K, D, D, device=device)
-
-        self.eval()
-        for X, y in loader:
-            X = X.to(device, non_blocking=True)
-            y = y.to(device, non_blocking=True)
-            z = encode(X)                                 # [B, D]
-            r = self._resp_true_class(z, y)               # [B, K]
-
-            for c in range(C):
-                m = (y == c)
-                if not m.any():
-                    continue
-                zc = z[m]                                 # [Bc, D]
-                rc = r[m]                                 # [Bc, K]
-                Nk[c] += rc.sum(0)                        # [K]
-                S1[c] += rc.T @ zc                        # [K,D]
-                S2[c] += torch.einsum('bk,bd,be->kde', rc, zc, zc)  # [K,D,D]
-
-        Nk_safe = Nk.clamp_min(1e-8)
-        mu_new  = S1 / Nk_safe.unsqueeze(-1)                         # [C,K,D]
-        Ezz     = S2 / Nk_safe.unsqueeze(-1).unsqueeze(-1)           # [C,K,D,D]
-        Sigma   = Ezz - torch.einsum('ckd,cke->ckde', mu_new, mu_new)# [C,K,D,D]
-
-        # regularize & cholesky
-        eye = torch.eye(D, device=device).expand(C, K, D, D)
-        Sigma = 0.5 * (Sigma + Sigma.transpose(-1, -2)) + var_floor * eye
-        Sigma = Sigma + jitter * eye
-        L_new = torch.linalg.cholesky(Sigma)                         # [C,K,D,D]
-
-        pi_new = (Nk_safe / Nk_safe.sum(-1, keepdim=True)).clamp_min(1e-8)
-        logits_pi_new = pi_new.log()
-
-        # EMA updates
-        self.mu.data        = momentum * self.mu.data        + (1 - momentum) * mu_new
-        self.covL.data      = momentum * self.covL.data      + (1 - momentum) * L_new
-        self.logits_pi.data = momentum * self.logits_pi.data + (1 - momentum) * logits_pi_new
