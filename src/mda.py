@@ -11,7 +11,7 @@ class MDAHead(nn.Module):
         # Cholesky factor L of full covariance Σ = L L^T
         L = torch.eye(d).repeat(self.C, self.K, 1, 1)
         self.covL      = nn.Parameter(L)       # lower-triangular
-        self.register_buffer("logits_prior", torch.zeros(self.C))
+        self.logits_prior = nn.Parameter(torch.zeros(self.C))
 
     # ----- log N(z | μ, Σ) via Cholesky; returns [B, C, K] -----
     def _component_logpdf(self, z: torch.Tensor) -> torch.Tensor:
