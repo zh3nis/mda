@@ -38,3 +38,13 @@ class MDAHead(nn.Module):
         logpi  = F.log_softmax(self.logits_pi, dim=-1)    # [C, K]
         log_pz_c = torch.logsumexp(logpdf + logpi.unsqueeze(0), dim=-1)  # [B,C]
         return self.logits_prior.unsqueeze(0) + log_pz_c
+    
+    @torch.no_grad()
+    def mu_hat(self, z: torch.Tensor):
+        logpdf = self._component_logpdf(z)
+        logpi  = F.log_softmax(self.logits_pi, -1)
+        gamma  = (logpdf + logpi.unsqueeze(0))
+        gamma  = (gamma - torch.logsumexp(gamma, dim=(1,2), keepdim=True)).exp()  # [B,C,K]
+        Nk = gamma.sum(0).clamp_min(1e-4)                                         # [C,K]
+        mu_hat = (gamma.permute(1,2,0) @ z) / Nk[...,None] 
+        return mu_hat
